@@ -12,15 +12,18 @@ import Header from '../../components/common/Header';
 import { useTasks } from '../../context/TaskContext';
 import { useColors } from '../../context/useColors';
 import { useTheme, ThemeMode } from '../../context/ThemeContext';
-
-const NAME_KEY = 'taskflow-name';
+import { useAuth } from '../../context/AuthContext';
 
 export default function Profile() {
   const { tasks, resetTasks } = useTasks();
   const colors = useColors();
   const { mode, setMode } = useTheme();
+  const { session, signOut } = useAuth();
   const [name, setName] = useState('');
   const [loaded, setLoaded] = useState(false);
+
+  // Each account keeps its own saved name on this device
+  const nameKey = `taskflow-name-${session?.user.id ?? 'guest'}`;
 
   const modes: { key: ThemeMode; label: string }[] = [
     { key: 'auto', label: 'Auto' },
@@ -31,23 +34,24 @@ export default function Profile() {
   useEffect(() => {
     const load = async () => {
       try {
-        const saved = await AsyncStorage.getItem(NAME_KEY);
-        if (saved !== null) setName(saved);
+        const saved = await AsyncStorage.getItem(nameKey);
+        setName(saved ?? '');
       } catch (error) {
         console.warn('Could not load name', error);
       } finally {
         setLoaded(true);
       }
     };
+    setLoaded(false);
     load();
-  }, []);
+  }, [nameKey]);
 
   useEffect(() => {
     if (!loaded) return;
-    AsyncStorage.setItem(NAME_KEY, name).catch((error) =>
+    AsyncStorage.setItem(nameKey, name).catch((error) =>
       console.warn('Could not save name', error)
     );
-  }, [name, loaded]);
+  }, [name, loaded, nameKey]);
 
   const confirmReset = () => {
     Alert.alert(
@@ -65,6 +69,13 @@ export default function Profile() {
         },
       ]
     );
+  };
+
+  const confirmSignOut = () => {
+    Alert.alert('Sign out?', 'You will need to sign in again.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Sign out', style: 'destructive', onPress: () => signOut() },
+    ]);
   };
 
   const total = tasks.length;
@@ -102,6 +113,10 @@ export default function Profile() {
           value={name}
           onChangeText={setName}
         />
+
+        <Text style={[styles.email, { color: colors.subtext }]}>
+          {session?.user.email ?? ''}
+        </Text>
       </View>
 
       <Text style={[styles.sectionTitle, { color: colors.text }]}>Your tasks</Text>
@@ -138,8 +153,12 @@ export default function Profile() {
         ))}
       </View>
 
+      <Pressable style={styles.signOutButton} onPress={confirmSignOut}>
+        <Text style={styles.buttonText}>Sign out</Text>
+      </Pressable>
+
       <Pressable style={styles.resetButton} onPress={confirmReset}>
-        <Text style={styles.resetText}>Reset all data</Text>
+        <Text style={styles.buttonText}>Reset all data</Text>
       </Pressable>
     </View>
   );
@@ -179,6 +198,10 @@ const styles = StyleSheet.create({
     fontSize: 18,
     textAlign: 'center',
   },
+  email: {
+    fontSize: 14,
+    marginTop: 10,
+  },
   sectionTitle: {
     fontSize: 18,
     fontWeight: '600',
@@ -203,14 +226,21 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginTop: 4,
   },
-  resetButton: {
-    backgroundColor: '#ef4444',
+  signOutButton: {
+    backgroundColor: '#3b82f6',
     paddingVertical: 14,
     borderRadius: 10,
     alignItems: 'center',
     marginTop: 32,
   },
-  resetText: {
+  resetButton: {
+    backgroundColor: '#ef4444',
+    paddingVertical: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+    marginTop: 12,
+  },
+  buttonText: {
     color: '#ffffff',
     fontSize: 16,
     fontWeight: '600',

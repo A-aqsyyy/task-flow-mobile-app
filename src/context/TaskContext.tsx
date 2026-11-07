@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { supabase } from '../lib/supabase';
+import { useAuth } from './AuthContext';
 
 export type Day = 'Mon' | 'Tue' | 'Wed' | 'Thu' | 'Fri' | 'Sat' | 'Sun';
 
@@ -22,74 +23,131 @@ type TaskContextType = {
   resetTasks: () => void;
 };
 
-const STORAGE_KEY = 'taskflow-tasks';
+type Row = {
+  id: string;
+  title: string;
+  done: boolean;
+  day: string | null;
+};
+
+const COLUMNS = 'id, title, done, day';
 
 const TaskContext = createContext<TaskContextType | undefined>(undefined);
 
-const initialTasks: Task[] = [
-  { id: '1', title: 'Learn React Native', done: false },
-  { id: '2', title: 'Practice JavaScript', done: false },
-  { id: '3', title: 'Build TaskFlow', done: false },
-];
+function toTask(row: Row): Task {
+  return {
+    id: row.id,
+    title: row.title,
+    done: row.done,
+    day: (row.day ?? undefined) as Day | undefined,
+  };
+}
 
 export function TaskProvider({ children }: { children: ReactNode }) {
-  const [tasks, setTasks] = useState<Task[]>(initialTasks);
-  const [loaded, setLoaded] = useState(false);
+  const { session } = useAuth();
+  const userId = session?.user.id;
+  const [tasks, setTasks] = useState<Task[]>([]);
 
+  const loadTasks = async () => {
+    const { data, error } = await supabase
+      .from('tasks')
+      .select(COLUMNS)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.warn('Could not load tasks', error.message);
+      return;
+    }
+    setTasks((data as Row[]).map(toTask));
+  };
+
+  // Load this user's tasks when they sign in, clear them when they sign out
   useEffect(() => {
-    const load = async () => {
-      try {
-        const saved = await AsyncStorage.getItem(STORAGE_KEY);
-        if (saved !== null) {
-          setTasks(JSON.parse(saved));
-        }
-      } catch (error) {
-        console.warn('Could not load tasks', error);
-      } finally {
-        setLoaded(true);
-      }
-    };
-    load();
-  }, []);
+    if (!userId) {
+      setTasks([]);
+      return;
+    }
+    loadTasks();
+  }, [userId]);
 
-  useEffect(() => {
-    if (!loaded) return;
-    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(tasks)).catch((error) =>
-      console.warn('Could not save tasks', error)
-    );
-  }, [tasks, loaded]);
+  const addTask = async (title: string, day?: Day) => {
+    const { data, error } = await supabase
+      .from('tasks')
+      .insert({ title, day: day ?? null })
+      .select(COLUMNS)
+      .single();
 
-  const addTask = (title: string, day?: Day) => {
-    setTasks((current) => [
-      { id: Date.now().toString(), title, done: false, day },
-      ...current,
-    ]);
+    if (error) {
+      console.warn('Could not add task', error.message);
+      return;
+    }
+    setTasks((current) => [toTask(data as Row), ...current]);
   };
 
-  const toggleTask = (id: string) => {
+  const toggleTask = async (id: string) => {
+    const task = tasks.find((t) => t.id === id);
+    if (!task) return;
+
     setTasks((current) =>
-      current.map((task) =>
-        task.id === id ? { ...task, done: !task.done } : task
-      )
+      current.map((t) => (t.id === id ? { ...t, done: !t.done } : t))
     );
+
+    const { error } = await supabase
+      .from('tasks')
+      .update({ done: !task.done })
+      .eq('id', id);
+
+    if (error) {
+      console.warn('Could not update task', error.message);
+      loadTasks();
+    }
   };
 
-  const deleteTask = (id: string) => {
-    setTasks((current) => current.filter((task) => task.id !== id));
+  const deleteTask = async (id: string) => {
+    setTasks((current) => current.filter((t) => t.id !== id));
+
+    const { error } = await supabase.from('tasks').delete().eq('id', id);
+
+    if (error) {
+      console.warn('Could not delete task', error.message);
+      loadTasks();
+    }
   };
 
-  const clearDone = () => {
-    setTasks((current) => current.filter((task) => !task.done));
+  const clearDone = async () => {
+    setTasks((current) => current.filter((t) => !t.done));
+
+    const { error } = await supabase.from('tasks').delete().eq('done', true);
+
+    if (error) {
+      console.warn('Could not clear done tasks', error.message);
+      loadTasks();
+    }
   };
 
-  const editTask = (id: string, title: string) => {
+  const editTask = async (id: string, title: string) => {
     setTasks((current) =>
-      current.map((task) => (task.id === id ? { ...task, title } : task))
+      current.map((t) => (t.id === id ? { ...t, title } : t))
     );
+
+    const { error } = await supabase.from('tasks').update({ title }).eq('id', id);
+
+    if (error) {
+      console.warn('Could not edit task', error.message);
+      loadTasks();
+    }
   };
 
-  const resetTasks = () => {
-    setTasks(initialTasks);
+  const resetTasks = async () => {
+    if (!userId) return;
+    setTasks([]);
+
+    const { error } = await supabase.from('tasks').delete().eq('user_id', userId);
+
+    if (error) {
+      console.warn('Could not reset tasks', error.message);
+      loadTasks();
+    }
   };
 
   return (
